@@ -1,0 +1,9 @@
+{
+  "name": "spaceship",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Voxel Anti-Gravity Space Game",
+  "scripts": {
+    "build": "echo 'Static web build ready in build/web'"
+  }
+}
