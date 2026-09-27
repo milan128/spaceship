@@ -135,6 +135,9 @@ extension CameraShakeExtension on CameraComponent {
   }
 }
 
+/// Available weapon power-ups dropped by golden Lucky Blocks
+enum ActivePowerUp { none, tripleShot, railgun, timeFreeze }
+
 // =============================================================================
 // MAIN FLAME GAME CLASS
 // =============================================================================
@@ -167,6 +170,13 @@ class AntiGravityGame extends FlameGame
   int score = 0;
   int wave = 1;
   int currentTargetWordIndex = 0;
+
+  // Power-up State & Timers
+  ActivePowerUp currentPowerUp = ActivePowerUp.none;
+  double powerUpTimer = 0.0;
+  String powerUpBannerText = '';
+  double powerUpBannerTimer = 0.0;
+  double _luckyBlockSpawnTimer = 4.0; // First lucky block arrives within 4 seconds!
 
   // Word pool
   final List<String> targetWordDictionary = [
@@ -225,6 +235,7 @@ class AntiGravityGame extends FlameGame
     try {
       await FlameAudio.audioCache.loadAll([
         'boom.wav',
+        'powerup.wav',
         'space_theme.wav',
         'space_theme_2.wav',
         'space_theme_3.wav',
@@ -305,6 +316,8 @@ class AntiGravityGame extends FlameGame
     wave = 1;
     currentTargetWordIndex = 0;
     player.position = Vector2(gameWidth / 2, 740);
+    deactivatePowerUp();
+    _luckyBlockSpawnTimer = 4.0;
 
     // 3. Play restart boom sound
     try {
@@ -412,6 +425,11 @@ class AntiGravityGame extends FlameGame
     );
     distractorWordRigs.add(distractorRig2);
     world.add(distractorRig2);
+
+    // Apply stasis if freeze power-up is active
+    if (currentPowerUp == ActivePowerUp.timeFreeze) {
+      _applyFreeze(true);
+    }
   }
 
   /// Handles completion sequence when all letters of the correct word turn red.
@@ -453,6 +471,55 @@ class AntiGravityGame extends FlameGame
         },
       ),
     );
+  }
+
+  /// Spawns a floating golden lucky block at the top of the screen.
+  void spawnLuckyBlock() {
+    final spawnX = 40.0 + Random().nextDouble() * (gameWidth - 80.0);
+    world.add(LuckyBlockComponent(spawnPosition: Vector2(spawnX, -30)));
+  }
+
+  /// Activates a temporary weapon power-up with duration and banner announcement.
+  void activatePowerUp(ActivePowerUp type) {
+    currentPowerUp = type;
+    powerUpTimer = 9.0;
+    powerUpBannerTimer = 2.2;
+
+    switch (type) {
+      case ActivePowerUp.tripleShot:
+        powerUpBannerText = '★ TRIPLE SPREAD SHOT! ★';
+        break;
+      case ActivePowerUp.railgun:
+        powerUpBannerText = '★ PIERCING RAILGUN! ★';
+        break;
+      case ActivePowerUp.timeFreeze:
+        powerUpBannerText = '★ ZERO-G TIME FREEZE! ★';
+        _applyFreeze(true);
+        break;
+      case ActivePowerUp.none:
+        break;
+    }
+
+    // Play sparkling power-up chime
+    try {
+      FlameAudio.play('powerup.wav', volume: 0.9);
+    } catch (_) {}
+  }
+
+  /// Deactivates current power-up and restores normal flight physics.
+  void deactivatePowerUp() {
+    if (currentPowerUp == ActivePowerUp.timeFreeze) {
+      _applyFreeze(false);
+    }
+    currentPowerUp = ActivePowerUp.none;
+    powerUpTimer = 0.0;
+  }
+
+  void _applyFreeze(bool freeze) {
+    targetWordRig?.isFrozen = freeze;
+    for (final rig in distractorWordRigs) {
+      rig.isFrozen = freeze;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -518,6 +585,26 @@ class AntiGravityGame extends FlameGame
       player.size.x / 2 + 10,
       gameWidth - player.size.x / 2 - 10,
     );
+
+    // Lucky block periodic spawner
+    _luckyBlockSpawnTimer -= dt;
+    if (_luckyBlockSpawnTimer <= 0) {
+      spawnLuckyBlock();
+      _luckyBlockSpawnTimer = 11.0 + Random().nextDouble() * 5.0; // Every 11-16 seconds
+    }
+
+    // Power-up countdown timer
+    if (powerUpTimer > 0) {
+      powerUpTimer -= dt;
+      if (powerUpTimer <= 0) {
+        deactivatePowerUp();
+      }
+    }
+
+    // Power-up announcement banner timer
+    if (powerUpBannerTimer > 0) {
+      powerUpBannerTimer -= dt;
+    }
   }
 
   @override
@@ -570,6 +657,106 @@ class AntiGravityGame extends FlameGame
       textDirection: TextDirection.ltr,
     )..layout();
     wavePainter.paint(canvas, const Offset(170, 26));
+
+    // Active Power-Up Voxel Badge
+    if (currentPowerUp != ActivePowerUp.none && powerUpTimer > 0) {
+      final Color badgeColor;
+      final String badgeName;
+      switch (currentPowerUp) {
+        case ActivePowerUp.tripleShot:
+          badgeColor = const Color(0xFFFFB300);
+          badgeName = 'TRIPLE SHOT';
+          break;
+        case ActivePowerUp.railgun:
+          badgeColor = const Color(0xFFFF007F);
+          badgeName = 'RAILGUN';
+          break;
+        case ActivePowerUp.timeFreeze:
+          badgeColor = const Color(0xFF00E5FF);
+          badgeName = 'STASIS';
+          break;
+        case ActivePowerUp.none:
+          badgeColor = Colors.grey;
+          badgeName = '';
+      }
+
+      final badgeRect = Rect.fromLTWH(gameWidth / 2 - 85, 64, 170, 26);
+      VoxelDrawingUtils.drawVoxelBox(
+        canvas: canvas,
+        rect: badgeRect,
+        baseColor: badgeColor,
+        depth: 3.0,
+        strokeColor: Colors.black,
+        isEmissive: true,
+      );
+
+      final badgePainter = TextPainter(
+        text: TextSpan(
+          text: '$badgeName [${powerUpTimer.toStringAsFixed(1)}s]',
+          style: const TextStyle(
+            fontFamily: 'Courier',
+            fontWeight: FontWeight.w900,
+            fontSize: 12,
+            color: Colors.black,
+            letterSpacing: 0.8,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      badgePainter.paint(
+        canvas,
+        Offset(
+          badgeRect.left + (badgeRect.width - badgePainter.width) / 2,
+          badgeRect.top + (badgeRect.height - badgePainter.height) / 2,
+        ),
+      );
+    }
+
+    // Power-Up Announcement Floating Banner
+    if (powerUpBannerTimer > 0) {
+      final bannerAlpha = (powerUpBannerTimer / 2.2).clamp(0.0, 1.0);
+      final bannerRect = Rect.fromLTWH(24, 100, gameWidth - 48, 36);
+
+      final bannerBg = Paint()
+        ..color = const Color(0xFF0D1117).withValues(alpha: 0.92 * bannerAlpha)
+        ..style = PaintingStyle.fill;
+      final bannerBorder = Paint()
+        ..color = const Color(0xFFFFD700).withValues(alpha: bannerAlpha)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0;
+
+      canvas.drawRect(bannerRect, bannerBg);
+      canvas.drawRect(bannerRect, bannerBorder);
+
+      final bannerPainter = TextPainter(
+        text: TextSpan(
+          text: powerUpBannerText,
+          style: TextStyle(
+            fontFamily: 'Courier',
+            fontWeight: FontWeight.w900,
+            fontSize: 15,
+            color: Color(0xFFFFD700).withValues(alpha: bannerAlpha),
+            letterSpacing: 1.2,
+            shadows: [
+              Shadow(
+                color: Color(0xFFFF6D00).withValues(alpha: bannerAlpha),
+                blurRadius: 10.0,
+              ),
+            ],
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      bannerPainter.paint(
+        canvas,
+        Offset(
+          bannerRect.left + (bannerRect.width - bannerPainter.width) / 2,
+          bannerRect.top + (bannerRect.height - bannerPainter.height) / 2,
+        ),
+      );
+    }
   }
 }
 
@@ -643,6 +830,9 @@ class WordRigComponent extends PositionComponent
 
   // Success detachment state
   bool isCompleted = false;
+
+  // Zero-G stasis freeze state (Time Freeze power-up)
+  bool isFrozen = false;
 
   static const double letterBlockSize = 38.0;
   static const double letterBlockSpacing = 4.0;
@@ -752,8 +942,8 @@ class WordRigComponent extends PositionComponent
   void update(double dt) {
     super.update(dt);
 
-    // If completed and gliding to the dock, skip harmonic physics updates
-    if (isCompleted) return;
+    // If completed and gliding to the dock, or frozen in zero-g stasis, skip harmonic physics updates
+    if (isCompleted || isFrozen) return;
 
     _lifetime += dt;
 
@@ -784,6 +974,21 @@ class WordRigComponent extends PositionComponent
     final damping = exp(-5.0 * dt);
     _deflectionImpulse.scale(damping);
     _deflectionTorque *= exp(-4.0 * dt);
+  }
+
+  @override
+  void render(Canvas canvas) {
+    super.render(canvas);
+
+    // If zero-g stasis freeze is active, render an icy cyan frost glow border
+    if (isFrozen) {
+      final frostPaint = Paint()
+        ..color = const Color(0xFF00E5FF).withValues(alpha: 0.45)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0
+        ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 8.0);
+      canvas.drawRect(Rect.fromLTWH(-4, -4, size.x + 8, size.y + 8), frostPaint);
+    }
   }
 }
 
@@ -850,9 +1055,11 @@ class LetterBlockComponent extends PositionComponent
   ) {
     super.onCollisionStart(intersectionPoints, other);
 
-    // Laser collision handling (single laser destroys single letter block)
+    // Laser collision handling (single laser destroys single letter block, railgun pierces)
     if (other is VoxelLaser && !other.isRemoved) {
-      other.removeFromParent(); // Destroy laser bullet immediately
+      if (!other.isPiercing) {
+        other.removeFromParent(); // Destroy laser bullet immediately unless piercing
+      }
 
       // Forward hit event to parent WordRig
       final parentRig = parent;
@@ -918,13 +1125,22 @@ class LetterBlockComponent extends PositionComponent
 /// Procedural voxel energy projectile fired by the player ship.
 class VoxelLaser extends PositionComponent
     with CollisionCallbacks, HasGameReference<AntiGravityGame> {
-  VoxelLaser({required super.position})
-      : super(
-          size: Vector2(6, 18),
+  VoxelLaser({
+    required super.position,
+    Vector2? velocity,
+    this.isPiercing = false,
+    this.isRailgun = false,
+    Vector2? laserSize,
+  })  : velocity = velocity ?? Vector2(0, laserSpeed),
+        super(
+          size: laserSize ?? (isRailgun ? Vector2(10, 36) : Vector2(6, 18)),
           anchor: Anchor.center,
         );
 
   static const double laserSpeed = -780.0; // Moving upward
+  final Vector2 velocity;
+  final bool isPiercing;
+  final bool isRailgun;
 
   @override
   Future<void> onLoad() async {
@@ -935,10 +1151,10 @@ class VoxelLaser extends PositionComponent
   @override
   void update(double dt) {
     super.update(dt);
-    position.y += laserSpeed * dt;
+    position += velocity * dt;
 
-    // Despawn when exiting screen top
-    if (position.y < -30) {
+    // Despawn when exiting screen boundaries
+    if (position.y < -40 || position.x < -30 || position.x > AntiGravityGame.gameWidth + 30) {
       removeFromParent();
     }
   }
@@ -949,11 +1165,17 @@ class VoxelLaser extends PositionComponent
 
     // Chunky neon laser bolt
     final rect = Rect.fromLTWH(0, 0, size.x, size.y);
+    final color = isRailgun
+        ? const Color(0xFFFF007F) // Neon Magenta Railgun
+        : (velocity.x != 0.0
+            ? const Color(0xFFFFB300) // Amber Spread Laser
+            : const Color(0xFF00FF66)); // Neon Voxel Green
+
     VoxelDrawingUtils.drawVoxelBox(
       canvas: canvas,
       rect: rect,
-      baseColor: const Color(0xFF00FF66), // Neon Voxel Green
-      depth: 3.0,
+      baseColor: color,
+      depth: isRailgun ? 5.0 : 3.0,
       strokeColor: Colors.black,
       isEmissive: true,
     );
@@ -987,35 +1209,99 @@ class PlayerShipComponent extends PositionComponent
     _thrusterTimer += dt;
   }
 
-  /// Fires twin voxel laser bolts from the wingtip cannons.
+  /// Fires voxel laser bolts according to the current active power-up.
   void fireLasers() {
     if (_fireCooldown > 0.0) return;
-    _fireCooldown = fireRate;
 
-    // Left cannon
-    game.world.add(
-      VoxelLaser(
-        position: Vector2(position.x - 22, position.y - 18),
-      ),
-    );
+    if (game.currentPowerUp == ActivePowerUp.tripleShot) {
+      _fireCooldown = fireRate * 1.1;
 
-    // Right cannon
-    game.world.add(
-      VoxelLaser(
-        position: Vector2(position.x + 22, position.y - 18),
-      ),
-    );
-
-    // Subtle gun recoil effect
-    add(
-      MoveByEffect(
-        Vector2(0, 4),
-        EffectController(
-          duration: 0.06,
-          alternate: true,
+      // Center bolt
+      game.world.add(
+        VoxelLaser(
+          position: Vector2(position.x, position.y - 20),
+          velocity: Vector2(0, -820),
         ),
-      ),
-    );
+      );
+
+      // Left angled spread bolt
+      game.world.add(
+        VoxelLaser(
+          position: Vector2(position.x - 22, position.y - 18),
+          velocity: Vector2(-150, -800),
+        ),
+      );
+
+      // Right angled spread bolt
+      game.world.add(
+        VoxelLaser(
+          position: Vector2(position.x + 22, position.y - 18),
+          velocity: Vector2(150, -800),
+        ),
+      );
+
+      // Ship recoil
+      add(
+        MoveByEffect(
+          Vector2(0, 4),
+          EffectController(
+            duration: 0.06,
+            alternate: true,
+          ),
+        ),
+      );
+    } else if (game.currentPowerUp == ActivePowerUp.railgun) {
+      _fireCooldown = fireRate * 1.35; // Heavy punch cooldown
+
+      // Supercharged piercing railgun beam
+      game.world.add(
+        VoxelLaser(
+          position: Vector2(position.x, position.y - 24),
+          velocity: Vector2(0, -1100),
+          isPiercing: true,
+          isRailgun: true,
+        ),
+      );
+
+      // Heavy weapon recoil effect
+      add(
+        MoveByEffect(
+          Vector2(0, 7),
+          EffectController(
+            duration: 0.08,
+            alternate: true,
+          ),
+        ),
+      );
+    } else {
+      // Standard Twin Cannons
+      _fireCooldown = fireRate;
+
+      // Left cannon
+      game.world.add(
+        VoxelLaser(
+          position: Vector2(position.x - 22, position.y - 18),
+        ),
+      );
+
+      // Right cannon
+      game.world.add(
+        VoxelLaser(
+          position: Vector2(position.x + 22, position.y - 18),
+        ),
+      );
+
+      // Subtle gun recoil effect
+      add(
+        MoveByEffect(
+          Vector2(0, 4),
+          EffectController(
+            duration: 0.06,
+            alternate: true,
+          ),
+        ),
+      );
+    }
   }
 
   @override
@@ -1329,6 +1615,142 @@ class _VoxelStar {
   final double size;
   final double speed;
   final double alpha;
+}
+
+// =============================================================================
+// LUCKY BLOCK COMPONENT (POWER-UP DROP)
+// =============================================================================
+
+/// Roblox/Minecraft styled 3D golden mystery block drifting slowly downward.
+/// Shatters upon projectile impact to award random weapon or utility power-ups.
+class LuckyBlockComponent extends PositionComponent
+    with CollisionCallbacks, HasGameReference<AntiGravityGame> {
+  LuckyBlockComponent({required Vector2 spawnPosition})
+      : super(
+          position: spawnPosition,
+          size: Vector2(36, 36),
+          anchor: Anchor.center,
+        );
+
+  double _lifetime = 0.0;
+  final double _wobbleSpeed = 2.4 + Random().nextDouble();
+  final double _wobbleAmount = 16.0 + Random().nextDouble() * 12.0;
+  late double _initialX;
+  static const double fallSpeed = 62.0;
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+    _initialX = position.x;
+    add(RectangleHitbox(size: size, position: Vector2.zero()));
+  }
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+    _lifetime += dt;
+
+    position.y += fallSpeed * dt;
+    position.x = _initialX + sin(_lifetime * _wobbleSpeed) * _wobbleAmount;
+    position.x = position.x.clamp(
+      size.x / 2 + 10,
+      AntiGravityGame.gameWidth - size.x / 2 - 10,
+    );
+
+    // Subtle floating rotation wobble
+    angle = sin(_lifetime * 2.8) * 0.12;
+
+    // Despawn if it falls past bottom of screen
+    if (position.y > 830) {
+      removeFromParent();
+    }
+  }
+
+  @override
+  void onCollisionStart(
+    Set<Vector2> intersectionPoints,
+    PositionComponent other,
+  ) {
+    super.onCollisionStart(intersectionPoints, other);
+
+    if (other is VoxelLaser && !other.isRemoved) {
+      if (!other.isPiercing) {
+        other.removeFromParent();
+      }
+      _shatterAndAwardPowerUp();
+    }
+  }
+
+  void _shatterAndAwardPowerUp() {
+    removeFromParent();
+
+    // 28-particle golden celebration explosion
+    game.world.add(
+      VoxelParticleExplosion(
+        center: position.clone(),
+        count: 28,
+        colors: const [
+          Color(0xFFFFD700), // Pure Gold
+          Color(0xFFFFEA00), // Electric Lemon
+          Color(0xFFFF6D00), // Voxel Amber
+          Color(0xFFFFFFFF), // White Sparkle
+          Color(0xFF00E5FF), // Cyan Flare
+        ],
+      ),
+    );
+
+    // Choose randomly among the 3 signature power-ups
+    const powerUps = [
+      ActivePowerUp.tripleShot,
+      ActivePowerUp.railgun,
+      ActivePowerUp.timeFreeze,
+    ];
+    final selected = powerUps[Random().nextInt(powerUps.length)];
+    game.activatePowerUp(selected);
+  }
+
+  @override
+  void render(Canvas canvas) {
+    super.render(canvas);
+
+    final rect = Rect.fromLTWH(0, 0, size.x, size.y);
+
+    // 3D Golden Voxel Cube
+    VoxelDrawingUtils.drawVoxelBox(
+      canvas: canvas,
+      rect: rect,
+      baseColor: const Color(0xFFFFC107), // Minecraft Lucky Gold
+      depth: 6.0,
+      strokeColor: Colors.black,
+      isEmissive: true,
+    );
+
+    // Monospace Question Mark "?" on Front Face
+    final qPainter = TextPainter(
+      text: const TextSpan(
+        text: '?',
+        style: TextStyle(
+          fontFamily: 'Courier',
+          fontWeight: FontWeight.w900,
+          fontSize: 22,
+          color: Color(0xFF3E2723), // Dark voxel brown
+          shadows: [
+            Shadow(
+              color: Colors.white,
+              offset: Offset(1, 1),
+            ),
+          ],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final qOffset = Offset(
+      (size.x - qPainter.width) / 2,
+      (size.y - qPainter.height) / 2,
+    );
+    qPainter.paint(canvas, qOffset);
+  }
 }
 
 // =============================================================================
